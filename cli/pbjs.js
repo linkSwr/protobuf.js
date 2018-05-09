@@ -34,7 +34,7 @@ exports.main = function main(args, callback) {
             "force-message": "strict-message"
         },
         string: [ "target", "out", "path", "wrap", "dependency", "root", "lint" ],
-        boolean: [ "create", "encode", "decode", "verify", "convert", "delimited", "beautify", "comments", "es6", "sparse", "keep-case", "force-long", "force-number", "force-enum-string", "force-message" ],
+        boolean: [ "create", "encode", "decode", "verify", "convert", "delimited", "beautify", "comments", "es6", "sparse", "light", "keep-case", "force-long", "force-number", "force-enum-string", "force-message" ],
         default: {
             target: "json",
             create: true,
@@ -90,6 +90,8 @@ exports.main = function main(args, callback) {
                 "  -o, --out        Saves to a file instead of writing to stdout.",
                 "",
                 "  --sparse         Exports only those types referenced from a main file (experimental).",
+                "",
+                "  --light          Exports those types referenced from a main file and those types which main file depend of (experimental).",
                 "",
                 chalk.bold.gray("  Module targets only:"),
                 "",
@@ -194,6 +196,8 @@ exports.main = function main(args, callback) {
         "keepCase": argv["keep-case"] || false
     };
 
+    var itemMap = {};
+
     // Read from stdin
     if (files.length === 1 && files[0] === "-") {
         var data = [];
@@ -224,7 +228,7 @@ exports.main = function main(args, callback) {
     } else {
         try {
             root.loadSync(files, parseOptions).resolveAll(); // sync is deterministic while async is not
-            if (argv.sparse)
+            if (argv.sparse || argv.light)
                 sparsify(root);
             callTarget();
         } catch (err) {
@@ -242,23 +246,41 @@ exports.main = function main(args, callback) {
         if (tobj.fieldsArray)
             tobj.fieldsArray.forEach(function(fobj) {
                 fobj.referenced = true;
+                if (fobj && itemMap[fobj.type]) {
+                    itemMap[fobj.type].referenced = true;
+                }
             });
         if (tobj.oneofsArray)
             tobj.oneofsArray.forEach(function(oobj) {
                 oobj.referenced = true;
+                if (oobj && itemMap[oobj.type]) {
+                    itemMap[oobj.type].referenced = true;
+                }
             });
         // also mark an extension field's extended type, but not its (other) fields
-        if (tobj.extensionField)
+        if (tobj.extensionField) {
             tobj.extensionField.parent.referenced = true;
+        }
+
     }
 
     function sparsify(root) {
-
+        root._nestedArray.forEach(function (item) {
+            if (item && item.name) {
+                itemMap[item.name] = item;
+            }
+        });
         // 1. mark directly or indirectly referenced objects
         util.traverse(root, function(obj) {
             if (!obj.filename)
                 return;
             if (mainFiles.indexOf(obj.filename) > -1)
+                util.traverseResolved(obj, markReferenced);
+        });
+
+        // 将根据入口文件分析出来的依赖的子依赖再标记一次
+        util.traverse(root, function(obj) {
+            if (obj && obj.parent && obj.parent.referenced)
                 util.traverseResolved(obj, markReferenced);
         });
 
